@@ -98,7 +98,7 @@ def process_api_key_and_nonce(func):
         ret: TxHash
         try:
             created_tx, ret, err = await func(self, *args, **kwargs, nonce=nonce, api_key_index=api_key_index)
-            if ret.code != CODE_OK:
+            if (ret is None and err) or (ret and ret.code != CODE_OK):
                 self.nonce_manager.acknowledge_failure(api_key_index)
         except lighter.exceptions.BadRequestException as e:
             if "invalid nonce" in str(e):
