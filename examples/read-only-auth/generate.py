@@ -1,18 +1,16 @@
 import asyncio
 import json
 import logging
+import os
 import time
 import sys
 import lighter
 
-logging.basicConfig(level=logging.INFO)
-
-DURATION_IN_DAYS = 7
+logging.basicConfig(level=logging.INFO, force=True)
 
 
-def create_auth_token_for_timestamp(signer_client, timestamp, expiry_hours=8):
-    deadline = timestamp + (expiry_hours * 3600)
-    auth_token, error = signer_client.create_auth_token_with_expiry(deadline)
+def create_auth_token_for_timestamp(signer_client, timestamp, expiry_hours):
+    auth_token, error = signer_client.create_auth_token_with_expiry(expiry_hours * 3600, timestamp=timestamp)
     if error is not None:
         raise Exception(f"Failed to create auth token: {error}")
     return auth_token
@@ -43,9 +41,7 @@ async def generate_tokens_for_account(account_info, base_url, duration_days):
     for i in range(num_tokens):
         timestamp = start_timestamp + (i * interval_seconds)
         try:
-            auth_token = create_auth_token_for_timestamp(
-                signer_client, timestamp, expiry_hours
-            )
+            auth_token = create_auth_token_for_timestamp(signer_client, timestamp, expiry_hours)
             tokens[str(timestamp)] = auth_token
             logging.debug(f"Generated token for timestamp {timestamp}")
         except Exception as e:
@@ -72,9 +68,10 @@ async def main():
         logging.error(f"Invalid JSON in config file: {e}")
         sys.exit(1)
 
+    num_days = int(os.getenv("NUM_DAYS") or 28)
     base_url = config.get("BASE_URL")
     accounts = config.get("ACCOUNTS", [])
-    duration_days = config.get("DURATION_IN_DAYS", DURATION_IN_DAYS)
+    duration_days = config.get("DURATION_IN_DAYS", num_days)
 
     if not base_url:
         logging.error("BASE_URL not found in config")
@@ -87,19 +84,10 @@ async def main():
     logging.info(f"Generating tokens for {len(accounts)} account(s)")
     logging.info(f"Duration: {duration_days} days ({4 * duration_days} tokens per account)")
 
-    tasks = []
-    for account_info in accounts:
-        tasks.append(generate_tokens_for_account(account_info, base_url, duration_days))
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
     auth_tokens = {}
-    for result in results:
-        if isinstance(result, Exception):
-            logging.error(f"Error generating tokens: {result}")
-        else:
-            account_index, tokens = result
-            auth_tokens[str(account_index)] = tokens
+    for account_info in accounts:
+        account_index, tokens = await generate_tokens_for_account(account_info, base_url, duration_days)
+        auth_tokens[str(account_index)] = tokens
 
     output_file = "auth-tokens.json"
     with open(output_file, "w") as f:

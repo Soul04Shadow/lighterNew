@@ -20,7 +20,7 @@ The setup script configures API key 253 for all accounts associated with your Et
 
 ```bash
 cd examples/read-only-auth
-python3 setup.py > config.json
+python3 setup.py config.json
 ```
 
 This will:
@@ -39,7 +39,7 @@ ETH_PRIVATE_KEY = "your_ethereum_private_key_here"
 API_KEY_INDEX = 253  # Using 253 as it's typically unused
 ```
 
-### Output Format
+### Config Format
 
 ```json
 {
@@ -66,30 +66,15 @@ The generation script creates authentication tokens for future time periods.
 ### Running Generation
 
 ```bash
-python3 generate.py [config_file]
+NUM_DAYS=10 python3 generate.py config.json
 ```
 
 If no config file is specified, it defaults to `config.json`.
 
 ### Duration Configuration
 
-You can specify the duration in your config file:
-
-```json
-{
-  "BASE_URL": "https://testnet.zklighter.elliot.ai",
-  "DURATION_IN_DAYS": 7,
-  "ACCOUNTS": [...]
-}
-```
-
-Or modify the default in `generate.py`:
-
-```python
-DURATION_IN_DAYS = 7  # Generate tokens for 7 days
-```
-
-This will generate `4 * DURATION_IN_DAYS` tokens (4 per day, one every 6 hours).
+You can specify the duration in days using the `NUM_DAYS` environment variable, as in the command above.
+If the value is not specified, it defaults to 28 days.
 
 ### Output Format
 
@@ -118,26 +103,7 @@ Where:
 
 ### Looking Up Tokens
 
-Use this code to look up the appropriate token for the current time:
-
-```python
-import json
-import time
-
-# Load pre-generated tokens
-with open('auth-tokens.json') as f:
-    auth_tokens = json.load(f)
-
-# Get current aligned timestamp (6-hour boundary)
-current_timestamp = (int(time.time()) // (6 * 3600)) * (6 * 3600)
-
-# Look up token for specific account
-account_index = 0
-auth_token = auth_tokens[str(account_index)][str(current_timestamp)]
-
-# Use the token for authentication
-# (implementation depends on your API client)
-```
+Check the `get_auth_token.py` script which prints the Auth Token that should be used **at this moment**, as this will be invalidated in at most 8 hours.
 
 ### Time Alignment
 
@@ -158,48 +124,29 @@ Each token is valid for 8 hours from its timestamp:
 ### API Key 253
 
 We use API key index 253 because:
-- It's the last available index (0-255)
-- It's not typically used by other applications
+- It's the last available index [0-253]
+- It's not typically used by trading
 - Easy to remember for this specific use case
+- Easy to change and invalidate all tokens.
 
 ### Invalidating Tokens
 
 To invalidate all existing tokens:
 
 ```bash
-python3 setup.py > config.json
+python3 setup.py config.json
 ```
 
 Re-running the setup script generates new API keys for index 253, which invalidates all previously generated authentication tokens. This is useful if:
 - You suspect your tokens have been compromised
-- You want to rotate your API keys periodically
+- You want to rotate your tokens periodically
 - You need to revoke access immediately
 
 ### Best Practices
 
-1. **Store tokens securely**: The `auth-tokens.json` file contains sensitive authentication data
-2. **Regenerate regularly**: Set up a cron job to regenerate tokens periodically
-3. **Monitor usage**: Keep track of which tokens are being used
-4. **Separate keys**: Use different API keys for different purposes (253 for read-only)
+1. **Store tokens securely**: The `auth-tokens.json` file contains sensitive data (read only, but still)
+2. **Dedicated API key**: Use API key 253 for read-only token generation, as it can be invalidated easely.
 
-## Example Workflow
-
-Complete workflow for setting up and using pre-generated tokens:
-
-```bash
-# 1. Configure accounts (one-time setup)
-cd examples/read-only-auth
-python3 setup.py > config.json
-
-# 2. Generate tokens for the next 7 days
-python3 generate.py
-
-# 3. Use the tokens in your application
-python3 your_app.py  # Uses auth-tokens.json
-
-# 4. Regenerate tokens when needed (e.g., daily cron job)
-python3 generate.py
-```
 
 ## Troubleshooting
 
@@ -214,19 +161,8 @@ This could happen if:
 - Network connectivity issues
 - The account is not active
 
-### "Token not found for timestamp" error
-
-This means you don't have a token for the current time period. Run:
-
-```bash
-python3 generate.py
-```
-
-to generate fresh tokens.
-
 ## Additional Notes
 
 - Tokens are specific to each account index
 - Each account has its own set of time-aligned tokens
 - The system uses the SignerClient's native `create_auth_token_with_expiry` method
-- No modifications to the core lighter-python SDK are required
