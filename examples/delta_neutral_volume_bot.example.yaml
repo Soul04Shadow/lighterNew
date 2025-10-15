@@ -1,0 +1,63 @@
+# Example configuration for the delta neutral volume bot.
+# Replace placeholder keys and account information before running.
+
+bot:
+  base_url: "https://testnet.zklighter.elliot.ai"
+  market_symbol: "TRUMP"      # Symbol to trade; market id will be resolved dynamically
+  trade_quote_amount: 25.0    # Quote currency per leg (e.g. 25 USDC). Use trade_amount to specify raw base units instead.
+  trade_interval_seconds: 30  # Delay between trade cycles
+  max_slippage_bps: 50        # Maximum slippage in basis points per leg
+  reduce_only: false          # Set true to only reduce existing positions
+  retry_attempts: 3           # Retry count for failed order submissions
+  retry_backoff_seconds: 1.5  # Exponential backoff starting value
+  margin_mode: "cross"        # Default margin mode (cross or isolated)
+  leverage: 5.0               # Default leverage multiplier applied on startup
+  order_book_depth: 5         # Depth used when sampling the order book
+  log_level: "INFO"           # Used when no logging section is defined
+
+accounts:
+  maker:
+    private_key: "0xPRIMARY_API_KEY_PRIVATE_KEY"
+    account_index: 1
+    api_key_index: 1
+    nonce_management: optimistic
+    starting_client_order_index: 0
+    # additional_api_keys:
+    #   2: "0xSECONDARY_API_KEY_PRIVATE_KEY_FOR_INDEX_2"
+  taker:
+    private_key: "0xSECONDARY_API_KEY_PRIVATE_KEY"
+    account_index: 2
+    api_key_index: 1
+    nonce_management: optimistic
+    starting_client_order_index: 0
+
+account_pairs:
+  - name: "pair-1"
+    long_account: maker
+    short_account: taker
+    trade_quote_amount: 25.0
+    leverage: 5.0
+    margin_mode: cross
+    max_slippage_bps: 75
+    reduce_only: false
+
+logging:
+  version: 1
+  disable_existing_loggers: false
+  formatters:
+    default:
+      format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+  handlers:
+    console:
+      class: logging.StreamHandler
+      level: DEBUG
+      formatter: default
+      stream: ext://sys.stdout
+  loggers:
+    lighter.volume_bot:
+      level: DEBUG
+      handlers: [console]
+      propagate: false
+  root:
+    level: INFO
+    handlers: [console]
