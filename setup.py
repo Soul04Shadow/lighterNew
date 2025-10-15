@@ -33,6 +33,7 @@ REQUIRES = [
     "websockets >= 12.0.0",
     "eth-account >= 0.13.4",
     "requests >= 2.31.0",
+    "pyyaml >= 6.0",
 ]
 
 setup(
