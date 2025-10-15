@@ -17,7 +17,6 @@ import asyncio
 import logging
 import signal
 from dataclasses import dataclass, field
-from decimal import Decimal, ROUND_DOWN
 from logging.config import dictConfig
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -60,7 +59,6 @@ class AccountPairConfig:
     leverage: Optional[float] = None
     margin_mode: Optional[str] = None
     trade_amount: Optional[int] = None
-    trade_quote_amount: Optional[float] = None
     max_slippage_bps: Optional[int] = None
     reduce_only: Optional[bool] = None
 
@@ -70,14 +68,12 @@ class BotSettings:
     """Global runtime parameters for the volume bot."""
 
     base_url: str
-    market_index: Optional[int]
-    market_symbol: Optional[str]
-    trade_amount: Optional[int]
-    trade_quote_amount: Optional[float]
+    market_index: int
+    trade_amount: int
     trade_interval_seconds: float
     max_slippage_bps: int
-    base_precision: Optional[int]
-    price_precision: Optional[int]
+    base_precision: int
+    price_precision: int
     reduce_only: bool
     retry_attempts: int
     retry_backoff_seconds: float
@@ -128,38 +124,6 @@ class ExecutionReport:
     executions: List[OrderExecution]
     errors: Dict[str, str] = field(default_factory=dict)
     hedged: bool = False
-
-
-@dataclass
-class MarketConfig:
-    market_id: int
-    symbol: str
-    base_precision: int
-    price_precision: int
-    quote_precision: int
-    min_base_amount: int
-    min_quote_amount: int
-
-    @property
-    def base_scale(self) -> Decimal:
-        return Decimal(10) ** self.base_precision
-
-    @property
-    def price_scale(self) -> Decimal:
-        return Decimal(10) ** self.price_precision
-
-    @property
-    def quote_scale(self) -> Decimal:
-        return Decimal(10) ** self.quote_precision
-
-    def price_from_int(self, price: int) -> Decimal:
-        return Decimal(price) / self.price_scale
-
-    def to_base_units(self, value: Decimal) -> int:
-        return int((value * self.base_scale).to_integral_value(rounding=ROUND_DOWN))
-
-    def to_quote_units(self, value: Decimal) -> int:
-        return int((value * self.quote_scale).to_integral_value(rounding=ROUND_DOWN))
 
 
 class VolumeStats:
@@ -242,48 +206,16 @@ def load_config(path: Path) -> BotConfiguration:
         raise ConfigError("Configuration must define a mapping at the top level")
 
     bot_section = raw.get("bot") or {}
-    market_index = (
-        _parse_int(bot_section.get("market_index"), "bot.market_index")
-        if bot_section.get("market_index") is not None
-        else None
-    )
-    market_symbol_raw = bot_section.get("market_symbol")
-    market_symbol = str(market_symbol_raw).strip() if market_symbol_raw is not None else None
-    if market_symbol == "":
-        market_symbol = None
-    trade_amount = (
-        _parse_int(bot_section.get("trade_amount"), "bot.trade_amount")
-        if bot_section.get("trade_amount") is not None
-        else None
-    )
-    trade_quote_amount = (
-        _parse_float(bot_section.get("trade_quote_amount"), "bot.trade_quote_amount")
-        if bot_section.get("trade_quote_amount") is not None
-        else None
-    )
-    base_precision = (
-        _parse_int(bot_section.get("base_precision"), "bot.base_precision")
-        if bot_section.get("base_precision") is not None
-        else None
-    )
-    price_precision = (
-        _parse_int(bot_section.get("price_precision"), "bot.price_precision")
-        if bot_section.get("price_precision") is not None
-        else None
-    )
-
     settings = BotSettings(
         base_url=str(bot_section.get("base_url")),
-        market_index=market_index,
-        market_symbol=market_symbol,
-        trade_amount=trade_amount,
-        trade_quote_amount=trade_quote_amount,
+        market_index=_parse_int(bot_section.get("market_index", 0), "bot.market_index"),
+        trade_amount=_parse_int(bot_section.get("trade_amount", 1000), "bot.trade_amount"),
         trade_interval_seconds=_parse_float(
             bot_section.get("trade_interval_seconds", 30), "bot.trade_interval_seconds"
         ),
         max_slippage_bps=_parse_int(bot_section.get("max_slippage_bps", 50), "bot.max_slippage_bps"),
-        base_precision=base_precision,
-        price_precision=price_precision,
+        base_precision=_parse_int(bot_section.get("base_precision", 4), "bot.base_precision"),
+        price_precision=_parse_int(bot_section.get("price_precision", 2), "bot.price_precision"),
         reduce_only=bool(bot_section.get("reduce_only", False)),
         retry_attempts=_parse_int(bot_section.get("retry_attempts", 3), "bot.retry_attempts"),
         retry_backoff_seconds=_parse_float(
@@ -302,8 +234,6 @@ def load_config(path: Path) -> BotConfiguration:
 
     if not settings.base_url:
         raise ConfigError("'bot.base_url' must be provided")
-    if not settings.market_symbol and settings.market_index is None:
-        raise ConfigError("Either 'bot.market_symbol' or 'bot.market_index' must be provided")
 
     accounts_raw = raw.get("accounts")
     if not isinstance(accounts_raw, dict) or not accounts_raw:
@@ -325,27 +255,14 @@ def load_config(path: Path) -> BotConfiguration:
             )
         parsed_additional_keys = {int(idx): str(key) for idx, key in additional_api_keys.items()}
 
-        account_index = _parse_int(account_cfg["account_index"], f"accounts.{name}.account_index")
-        api_key_index = _parse_int(account_cfg["api_key_index"], f"accounts.{name}.api_key_index")
-
-        max_api_key_index = _parse_int(
-            account_cfg.get("max_api_key_index", -1), f"accounts.{name}.max_api_key_index"
-        )
-        if parsed_additional_keys and max(parsed_additional_keys) > max_api_key_index:
-            raise ConfigError(
-                f"Account '{name}' additional_api_keys index exceeds max_api_key_index"
-            )
-        if not parsed_additional_keys and max_api_key_index > api_key_index:
-            raise ConfigError(
-                f"Account '{name}' sets max_api_key_index>{api_key_index} but does not provide additional_api_keys"
-            )
-
         accounts[name] = AccountCredentials(
             name=name,
             private_key=str(account_cfg["private_key"]),
-            account_index=account_index,
-            api_key_index=api_key_index,
-            max_api_key_index=max_api_key_index,
+            account_index=_parse_int(account_cfg["account_index"], f"accounts.{name}.account_index"),
+            api_key_index=_parse_int(account_cfg["api_key_index"], f"accounts.{name}.api_key_index"),
+            max_api_key_index=_parse_int(
+                account_cfg.get("max_api_key_index", -1), f"accounts.{name}.max_api_key_index"
+            ),
             nonce_management=str(account_cfg.get("nonce_management", "optimistic")),
             starting_client_order_index=_parse_int(
                 account_cfg.get("starting_client_order_index", 0),
@@ -381,13 +298,6 @@ def load_config(path: Path) -> BotConfiguration:
             trade_amount=(
                 _parse_int(entry.get("trade_amount"), f"account_pairs.{entry['name']}.trade_amount")
                 if entry.get("trade_amount") is not None
-                else None
-            ),
-            trade_quote_amount=(
-                _parse_float(
-                    entry.get("trade_quote_amount"), f"account_pairs.{entry['name']}.trade_quote_amount"
-                )
-                if entry.get("trade_quote_amount") is not None
                 else None
             ),
             max_slippage_bps=(
@@ -435,11 +345,10 @@ class AccountSession:
         self.credentials = credentials
         self.logger = logger.getChild(f"account[{credentials.name}]")
         nonce_type = resolve_nonce_manager_type(credentials.nonce_management)
-        additional_keys = credentials.additional_api_keys or {}
-        private_keys = additional_keys if additional_keys else None
         max_api_key_index = credentials.max_api_key_index
-        if not additional_keys or max_api_key_index < credentials.api_key_index:
+        if max_api_key_index < 0:
             max_api_key_index = -1
+        private_keys = credentials.additional_api_keys or None
         self.client = lighter.SignerClient(
             url=settings.base_url,
             private_key=credentials.private_key,
@@ -560,7 +469,6 @@ class AccountPairSession:
         self,
         pair_config: AccountPairConfig,
         settings: BotSettings,
-        market: MarketConfig,
         long_session: AccountSession,
         short_session: AccountSession,
         stats: VolumeStats,
@@ -568,29 +476,13 @@ class AccountPairSession:
     ) -> None:
         self.config = pair_config
         self.settings = settings
-        self.market = market
         self.long_session = long_session
         self.short_session = short_session
         self.logger = logger.getChild(f"pair[{pair_config.name}]")
         margin_mode_name = pair_config.margin_mode or settings.margin_mode
         self.margin_mode_name, self.margin_mode_code = resolve_margin_mode(margin_mode_name)
         self.leverage = pair_config.leverage if pair_config.leverage is not None else settings.leverage
-        base_trade_amount = (
-            pair_config.trade_amount if pair_config.trade_amount is not None else settings.trade_amount
-        )
-        quote_trade_amount_raw = (
-            pair_config.trade_quote_amount
-            if pair_config.trade_quote_amount is not None
-            else settings.trade_quote_amount
-        )
-        self.trade_amount_base_units = base_trade_amount
-        self.trade_quote_amount = (
-            Decimal(str(quote_trade_amount_raw)) if quote_trade_amount_raw is not None else None
-        )
-        if self.trade_amount_base_units is None and self.trade_quote_amount is None:
-            raise ConfigError(
-                f"Pair '{pair_config.name}' must define a trade_amount or trade_quote_amount (directly or via bot defaults)"
-            )
+        self.trade_amount = pair_config.trade_amount if pair_config.trade_amount is not None else settings.trade_amount
         self.max_slippage_bps = (
             pair_config.max_slippage_bps
             if pair_config.max_slippage_bps is not None
@@ -620,39 +512,10 @@ class AccountPairSession:
             ),
         )
 
-    def _quote_to_base_units(self, price: int, side: str) -> int:
-        if self.trade_amount_base_units is not None:
-            return self.trade_amount_base_units
-
-        assert self.trade_quote_amount is not None  # guarded in __init__
-        quote_units = self.market.to_quote_units(self.trade_quote_amount)
-        if quote_units < self.market.min_quote_amount:
-            min_quote = Decimal(self.market.min_quote_amount) / self.market.quote_scale
-            raise ConfigError(
-                f"Configured quote amount {self.trade_quote_amount} is below market minimum {min_quote}"
-            )
-
-        price_decimal = self.market.price_from_int(price)
-        if price_decimal <= 0:
-            raise RuntimeError("Encountered non-positive price while computing trade size")
-
-        base_amount = self.trade_quote_amount / price_decimal
-        base_units = int((base_amount * self.market.base_scale).to_integral_value(rounding=ROUND_DOWN))
-
-        if base_units < self.market.min_base_amount:
-            min_base = Decimal(self.market.min_base_amount) / self.market.base_scale
-            raise ConfigError(
-                f"Computed base amount {base_amount:.{self.market.base_precision}f} {side} is below market minimum {min_base}"
-            )
-        if base_units <= 0:
-            raise ConfigError(
-                "Computed base amount rounds to zero; increase trade_quote_amount or check market precision"
-            )
-        return base_units
-
     async def execute_trade_cycle(
         self,
         *,
+        market_index: int,
         snapshot: MarketSnapshot,
         price_fetcher: Callable[[], Awaitable[MarketSnapshot]],
     ) -> ExecutionReport:
@@ -661,10 +524,9 @@ class AccountPairSession:
         errors: Dict[str, str] = {}
 
         async def submit_long() -> OrderExecution:
-            base_amount = self._quote_to_base_units(snapshot.best_ask, "buy")
             return await self.long_session.place_market_order(
-                market_index=self.market.market_id,
-                base_amount=base_amount,
+                market_index=market_index,
+                base_amount=self.trade_amount,
                 max_slippage=self.max_slippage,
                 is_ask=False,
                 reduce_only=self.reduce_only,
@@ -675,10 +537,9 @@ class AccountPairSession:
             )
 
         async def submit_short() -> OrderExecution:
-            base_amount = self._quote_to_base_units(snapshot.best_bid, "sell")
             return await self.short_session.place_market_order(
-                market_index=self.market.market_id,
-                base_amount=base_amount,
+                market_index=market_index,
+                base_amount=self.trade_amount,
                 max_slippage=self.max_slippage,
                 is_ask=True,
                 reduce_only=self.reduce_only,
@@ -710,13 +571,11 @@ class AccountPairSession:
             self.logger.error("Encountered errors while submitting orders: %s", errors)
 
         if "long" in errors and "short" in executions:
+            base_amount = executions["short"].order.base_amount or self.trade_amount
             try:
                 snapshot = await price_fetcher()
-                base_amount = executions["short"].order.base_amount or self._quote_to_base_units(
-                    snapshot.best_ask, "buy"
-                )
                 hedge_execution = await self.short_session.place_market_order(
-                    market_index=self.market.market_id,
+                    market_index=market_index,
                     base_amount=base_amount,
                     max_slippage=self.max_slippage,
                     is_ask=False,
@@ -732,13 +591,11 @@ class AccountPairSession:
                 errors["hedge_short"] = str(exc)
 
         if "short" in errors and "long" in executions:
+            base_amount = executions["long"].order.base_amount or self.trade_amount
             try:
                 snapshot = await price_fetcher()
-                base_amount = executions["long"].order.base_amount or self._quote_to_base_units(
-                    snapshot.best_bid, "sell"
-                )
                 hedge_execution = await self.long_session.place_market_order(
-                    market_index=self.market.market_id,
+                    market_index=market_index,
                     base_amount=base_amount,
                     max_slippage=self.max_slippage,
                     is_ask=True,
@@ -788,138 +645,56 @@ class DeltaNeutralVolumeBot:
     def __init__(self, config: BotConfiguration) -> None:
         self.config = config
         self.logger = logging.getLogger("lighter.volume_bot")
+        self.stats = VolumeStats(
+            base_precision=config.settings.base_precision,
+            price_precision=config.settings.price_precision,
+        )
         self.account_sessions: Dict[str, AccountSession] = {
             name: AccountSession(credentials=credentials, settings=config.settings, logger=self.logger)
             for name, credentials in config.accounts.items()
         }
         self.market_client = lighter.ApiClient(configuration=Configuration(host=config.settings.base_url))
         self.order_api = lighter.OrderApi(self.market_client)
-        self.stats: Optional[VolumeStats] = None
-        self.market: Optional[MarketConfig] = None
-        self._pair_configs = list(config.account_pairs)
         self.account_pairs: List[AccountPairSession] = []
+        for pair_cfg in config.account_pairs:
+            try:
+                long_session = self.account_sessions[pair_cfg.long_account]
+                short_session = self.account_sessions[pair_cfg.short_account]
+            except KeyError as exc:
+                raise ConfigError(
+                    f"Pair '{pair_cfg.name}' references unknown account '{exc.args[0]}'"
+                ) from exc
+            self.account_pairs.append(
+                AccountPairSession(
+                    pair_config=pair_cfg,
+                    settings=config.settings,
+                    long_session=long_session,
+                    short_session=short_session,
+                    stats=self.stats,
+                    logger=self.logger,
+                )
+            )
         self.stop_event = asyncio.Event()
 
     async def close(self) -> None:
         await asyncio.gather(*(session.close() for session in self.account_sessions.values()))
         await self.market_client.close()
 
-    @staticmethod
-    def _normalize_symbol(symbol: str) -> str:
-        return symbol.replace("-", "").replace("/", "").lower()
-
-    async def _ensure_market(self) -> None:
-        if self.market is not None:
-            return
-
-        order_books = await self.order_api.order_books()
-        markets = order_books.order_books or []
-        if not markets:
-            raise RuntimeError("Exchange did not return any markets from orderBooks endpoint")
-
-        desired_symbol = self.config.settings.market_symbol
-        desired_index = self.config.settings.market_index
-
-        selected = None
-        if desired_symbol:
-            normalized = self._normalize_symbol(desired_symbol)
-            for entry in markets:
-                if (
-                    entry.symbol.lower() == desired_symbol.lower()
-                    or self._normalize_symbol(entry.symbol) == normalized
-                ):
-                    selected = entry
-                    break
-            if selected is None:
-                available = ", ".join(sorted(entry.symbol for entry in markets))
-                raise ConfigError(
-                    f"Unable to locate market symbol '{desired_symbol}'. Available symbols: {available}"
-                )
-        elif desired_index is not None:
-            for entry in markets:
-                if entry.market_id == desired_index:
-                    selected = entry
-                    break
-            if selected is None:
-                raise ConfigError(
-                    f"Market with id {desired_index} not found on exchange"
-                )
-        else:
-            selected = markets[0]
-
-        base_precision = int(selected.supported_size_decimals)
-        price_precision = int(selected.supported_price_decimals)
-        quote_precision = int(selected.supported_quote_decimals)
-        base_scale = Decimal(10) ** base_precision
-        quote_scale = Decimal(10) ** quote_precision
-        min_base_amount = int(
-            (Decimal(str(selected.min_base_amount)) * base_scale).to_integral_value(rounding=ROUND_DOWN)
-        )
-        min_quote_amount = int(
-            (Decimal(str(selected.min_quote_amount)) * quote_scale).to_integral_value(rounding=ROUND_DOWN)
-        )
-
-        self.market = MarketConfig(
-            market_id=selected.market_id,
-            symbol=selected.symbol,
-            base_precision=base_precision,
-            price_precision=price_precision,
-            quote_precision=quote_precision,
-            min_base_amount=min_base_amount,
-            min_quote_amount=min_quote_amount,
-        )
-
-        self.config.settings.market_index = selected.market_id
-        self.config.settings.market_symbol = selected.symbol
-        self.config.settings.base_precision = base_precision
-        self.config.settings.price_precision = price_precision
-
-        if self.stats is None:
-            self.stats = VolumeStats(
-                base_precision=base_precision,
-                price_precision=price_precision,
-            )
-
-        if not self.account_pairs:
-            for pair_cfg in self._pair_configs:
-                try:
-                    long_session = self.account_sessions[pair_cfg.long_account]
-                    short_session = self.account_sessions[pair_cfg.short_account]
-                except KeyError as exc:
-                    raise ConfigError(
-                        f"Pair '{pair_cfg.name}' references unknown account '{exc.args[0]}'"
-                    ) from exc
-                self.account_pairs.append(
-                    AccountPairSession(
-                        pair_config=pair_cfg,
-                        settings=self.config.settings,
-                        market=self.market,
-                        long_session=long_session,
-                        short_session=short_session,
-                        stats=self.stats,
-                        logger=self.logger,
-                    )
-                )
-
     async def _prepare(self) -> None:
-        await self._ensure_market()
-        assert self.market is not None
-        await asyncio.gather(*(pair.prepare(self.market.market_id) for pair in self.account_pairs))
+        await asyncio.gather(
+            *(pair.prepare(self.config.settings.market_index) for pair in self.account_pairs)
+        )
 
     async def fetch_market_snapshot(self) -> MarketSnapshot:
-        if self.market is None:
-            raise RuntimeError("Market metadata has not been initialised")
-
         order_book = await self.order_api.order_book_orders(
-            market_id=self.market.market_id,
+            market_id=self.config.settings.market_index,
             limit=max(1, self.config.settings.order_book_depth),
         )
         if not order_book.bids or not order_book.asks:
             raise RuntimeError("Order book is empty; cannot determine prices")
 
         def parse_price(raw_price: str) -> int:
-            price_decimal = Decimal(str(raw_price))
-            return int((price_decimal * self.market.price_scale).to_integral_value(rounding=ROUND_DOWN))
+            return int(raw_price.replace(".", ""))
 
         best_bid = parse_price(order_book.bids[0].price)
         best_ask = parse_price(order_book.asks[0].price)
@@ -943,12 +718,8 @@ class DeltaNeutralVolumeBot:
     async def run(self) -> None:
         self._register_signal_handlers()
         await self._prepare()
-        assert self.market is not None and self.stats is not None
         self.logger.info(
-            "Starting delta-neutral volume bot on %s (market_id=%d) with %d account pairs",
-            self.market.symbol,
-            self.market.market_id,
-            len(self.account_pairs),
+            "Starting delta-neutral volume bot with %d account pairs", len(self.account_pairs)
         )
 
         cycle = 0
@@ -973,6 +744,7 @@ class DeltaNeutralVolumeBot:
                 reports = await asyncio.gather(
                     *(
                         pair.execute_trade_cycle(
+                            market_index=self.config.settings.market_index,
                             snapshot=snapshot,
                             price_fetcher=self.fetch_market_snapshot,
                         )
@@ -1010,10 +782,7 @@ class DeltaNeutralVolumeBot:
                 await self._sleep_with_stop(self.config.settings.trade_interval_seconds)
         finally:
             await self.close()
-            if self.stats is not None:
-                self.logger.info("Bot stopped. Final summary: %s", self.stats.summary())
-            else:
-                self.logger.info("Bot stopped before statistics were initialised")
+            self.logger.info("Bot stopped. Final summary: %s", self.stats.summary())
 
 
 def parse_args() -> argparse.Namespace:

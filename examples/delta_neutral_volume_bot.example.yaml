@@ -3,10 +3,12 @@
 
 bot:
   base_url: "https://testnet.zklighter.elliot.ai"
-  market_symbol: "TRUMP"      # Symbol to trade; market id will be resolved dynamically
-  trade_quote_amount: 25.0    # Quote currency per leg (e.g. 25 USDC). Use trade_amount to specify raw base units instead.
+  market_index: 0
+  trade_amount: 1000          # Raw base units per order (e.g. 0.1 ETH if precision=4)
   trade_interval_seconds: 30  # Delay between trade cycles
   max_slippage_bps: 50        # Maximum slippage in basis points per leg
+  base_precision: 4           # Number of decimal places for the base asset (10^4 scale)
+  price_precision: 2          # Number of decimal places for price (10^2 scale)
   reduce_only: false          # Set true to only reduce existing positions
   retry_attempts: 3           # Retry count for failed order submissions
   retry_backoff_seconds: 1.5  # Exponential backoff starting value
@@ -20,14 +22,14 @@ accounts:
     private_key: "0xPRIMARY_API_KEY_PRIVATE_KEY"
     account_index: 1
     api_key_index: 1
+    max_api_key_index: 1
     nonce_management: optimistic
     starting_client_order_index: 0
-    # additional_api_keys:
-    #   2: "0xSECONDARY_API_KEY_PRIVATE_KEY_FOR_INDEX_2"
   taker:
     private_key: "0xSECONDARY_API_KEY_PRIVATE_KEY"
     account_index: 2
     api_key_index: 1
+    max_api_key_index: 1
     nonce_management: optimistic
     starting_client_order_index: 0
 
@@ -35,7 +37,7 @@ account_pairs:
   - name: "pair-1"
     long_account: maker
     short_account: taker
-    trade_quote_amount: 25.0
+    trade_amount: 1000
     leverage: 5.0
     margin_mode: cross
     max_slippage_bps: 75
