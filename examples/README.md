@@ -22,3 +22,12 @@ API_KEY_INDEX = 1
 - deposit money on Lighter to create an account first
 - change the URL to `mainnet.zklighter.elliot.ai`
 - repeat setup step
+
+## Delta neutral volume bot
+- Populate `examples/delta_neutral_volume_bot.example.yaml` with your API key
+  credentials, leverage preferences and trading sizes.
+- Run `python examples/delta_neutral_volume_bot.py --config <path-to-config>`
+  to start the bot. Use the `--once` flag to execute a single hedged cycle for
+  smoke testing.
+- The bot emits per-pair statistics and a global volume summary after each
+  cycle, alongside warnings for any hedging fallbacks that are triggered.
